@@ -1,0 +1,23 @@
+
+# Ignore environment files
+.env
+.env.*
+
+# Ignore node_modules
+node_modules/
+
+# Ignore logs
+logs/
+*.log
+
+# Ignore temporary files
+*.tmp
+
+# Historico Local
+*.history/
+
+# Backups
+backup/
+
+# Vendor
+vendor/

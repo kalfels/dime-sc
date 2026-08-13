@@ -1,0 +1,82 @@
+# DOCUMENTAÇÃO DE COOKIES - SISTEMA DIME-SC
+# =====================================================
+# Sistema de Gestão de Declarações Fiscais
+# Desenvolvido por: Bitserv - Luis Fernando Kalfels
+# =====================================================
+
+## COOKIES UTILIZADOS PELO SISTEMA
+
+### 1. PHPSESSID (Cookie de Sessão)
+- **Finalidade**: Gerenciamento de sessão de usuário autenticado
+- **Tipo**: Cookie de sessão essencial
+- **Duração**: Até o fechamento do navegador (session.cookie_lifetime = 0)
+- **Domínio**: Domínio da aplicação
+- **Segurança**: 
+  - HttpOnly: SIM (não acessível via JavaScript)
+  - Secure: SIM (apenas HTTPS em produção)
+  - SameSite: Configuração padrão do PHP
+- **Dados armazenados**: ID da sessão PHP (string aleatória)
+- **Configurações**:
+  - session.use_only_cookies = 1 (apenas cookies, não URL)
+  - session.gc_maxlifetime = 3600 (1 hora de inatividade)
+  - session.cookie_httponly = 1 (proteção XSS)
+
+### 2. Dados de Sessão (Server-side)
+- **Armazenamento**: Servidor (não no navegador)
+- **Conteúdo**: 
+  - user_id: ID do usuário logado
+  - user_role: Perfil (admin/operador)
+  - user_name: Nome do usuário
+  - contabilista_id: ID do contabilista vinculado
+  - primeiro_acesso: Flag de primeiro acesso
+  - status_pagamento: Status financeiro
+
+## CONFORMIDADE LGPD/GDPR
+
+### Cookies Essenciais (Não requerem consentimento)
+- ✅ PHPSESSID: Essencial para funcionamento da aplicação
+- ✅ Autenticação e segurança do usuário
+- ✅ Não há tracking ou análise de comportamento
+
+### Cookies Não Utilizados
+- ❌ Cookies de análise (Google Analytics, etc.)
+- ❌ Cookies de marketing/publicidade
+- ❌ Cookies de terceiros
+- ❌ Cookies de rastreamento
+
+## GERENCIAMENTO DE COOKIES
+
+### Criação Automática
+- Cookie PHPSESSID criado automaticamente no login
+- Configurações de segurança aplicadas via config.php
+
+### Destruição
+- Logout: Cookie removido via setcookie() com tempo passado
+- Fechamento do navegador: Cookie expira automaticamente
+- Inatividade: Sessão expira em 1 hora (gc_maxlifetime)
+
+### Configurações de Segurança (config.php)
+```php
+ini_set('session.cookie_httponly', 1);     // Proteção XSS
+ini_set('session.use_only_cookies', 1);    // Apenas cookies
+ini_set('session.cookie_secure', isset($_SERVER['HTTPS'])); // HTTPS
+ini_set('session.gc_maxlifetime', 3600);   // 1 hora
+ini_set('session.cookie_lifetime', 0);     // Até fechar navegador
+```
+
+## POLÍTICA DE PRIVACIDADE
+
+O Sistema DIME-SC utiliza apenas cookies essenciais para:
+- Manter o usuário logado durante a sessão
+- Garantir a segurança da aplicação
+- Controlar acesso às funcionalidades
+
+Não coletamos dados para análise, marketing ou compartilhamento com terceiros.
+
+## CONTATO
+Para dúvidas sobre cookies e privacidade:
+- Email: luis@bitserv.com.br
+- Desenvolvedor: Luis Fernando Kalfels
+- Empresa: Bitserv
+
+Última atualização: Outubro 2024
