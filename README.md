@@ -12,7 +12,7 @@ A documentação completa e atualizada está localizada em:
 
 1. **Clone o repositório**:
    ```bash
-   git clone https://github.com/lkalfels/dime-sc.git
+   git clone https://github.com/kalfels/dime-sc.git
    cd dime-sc
    ```
 
