@@ -1,31 +1,139 @@
 <?php
-// Verificar se está sendo chamado diretamente
-if (!isset($_GET['dime_id'])) {
+// Verificar se está sendo chamado diretamente ou via AJAX
+$dime_id_raw = $_GET['dime_id'] ?? '';
+$dime_id = is_numeric($dime_id_raw) ? (int)$dime_id_raw : (int)base64_decode($dime_id_raw);
+
+if (!$dime_id) {
     header('HTTP/1.1 400 Bad Request');
-    echo 'Parâmetro dime_id obrigatório';
+    echo '<div class="alert alert-danger">Parâmetro dime_id obrigatório e deve ser válido.</div>';
     exit;
 }
-
-$dime_id = (int)$_GET['dime_id'];
 
 // Conectar ao banco
 require_once __DIR__ . '/../includes/config.php';
 
+// Função helper para formatar CNPJ
+function formatar_cnpj($cnpj) {
+    $cnpj = preg_replace('/\D/', '', (string)$cnpj);
+    if (strlen($cnpj) === 14) {
+        return preg_replace('/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/', '$1.$2.$3/$4-$5', $cnpj);
+    }
+    return $cnpj;
+}
+
+// Função helper para valores seguros
+function safe_value($data, $key, $default = '') {
+    return ($data && isset($data[$key]) && $data[$key] !== '') ? htmlspecialchars($data[$key]) : $default;
+}
+
 try {
     $pdo = new PDO("mysql:host=" . DB_HOST . ";dbname=" . DB_NAME, DB_USER, DB_PASS);
     $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-    
+
+    // Carregar declaração DIME e dados da empresa associada
+    $stmtDecl = $pdo->prepare("
+        SELECT d.*, 
+               e.cnpj, e.razao_social, e.inscricao_estadual, e.endereco, e.numero, 
+               e.complemento, e.bairro, e.cep, e.telefone, e.email, e.municipio_id
+        FROM dime_declaracoes d
+        JOIN empresas e ON e.id = d.empresa_id
+        WHERE d.id = ?
+    ");
+    $stmtDecl->execute([$dime_id]);
+    $dime_declaracao = $stmtDecl->fetch(PDO::FETCH_ASSOC);
+
+    if (!$dime_declaracao) {
+        echo '<div class="alert alert-danger">Declaração DIME #' . htmlspecialchars($dime_id) . ' ou empresa associada não encontrada.</div>';
+        exit;
+    }
+
+    // Carregar dados existentes do Quadro 00
+    $stmt = $pdo->prepare("SELECT * FROM dime_quadro_00 WHERE dime_declaracao_id = ?");
+    $stmt->execute([$dime_id]);
+    $quadro00_data = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    // Se o Quadro 00 não existir no banco, inicializá-lo com dados da empresa e declaração
+    if (!$quadro00_data) {
+        $endereco_completo = trim(($dime_declaracao['endereco'] ?? '') . ', ' . ($dime_declaracao['numero'] ?? ''));
+        if (!empty($dime_declaracao['complemento'])) $endereco_completo .= ', ' . $dime_declaracao['complemento'];
+        if (!empty($dime_declaracao['bairro'])) $endereco_completo .= ', ' . $dime_declaracao['bairro'];
+        if (empty(trim($endereco_completo, ', '))) $endereco_completo = 'Endereço não informado';
+
+        $municipio_codigo = '4205407';
+        if (!empty($dime_declaracao['municipio_id'])) {
+            $stmtM = $pdo->prepare("SELECT codigo_ibge FROM t_municipios WHERE id = ?");
+            $stmtM->execute([$dime_declaracao['municipio_id']]);
+            $ibge = $stmtM->fetchColumn();
+            if ($ibge) $municipio_codigo = $ibge;
+        }
+
+        $cep_limpo = preg_replace('/\D/', '', $dime_declaracao['cep'] ?? '') ?: '88380000';
+        $tipo_dec = (string)($dime_declaracao['tipo_declaracao'] ?? '1');
+        $regime_ap = (string)($dime_declaracao['regime_apuracao'] ?? '2');
+        $porte_emp = (string)($dime_declaracao['porte_empresa'] ?? '1');
+        $apur_cons = $dime_declaracao['apuracao_consolidada'] ? 2 : 1;
+        $apur_cent = 1;
+        $transf_cred = $dime_declaracao['transferencia_creditos_periodo'] ? 2 : 1;
+        $cred_pres = 1;
+        $cred_inc = 1;
+        $mov = $dime_declaracao['movimento'] ? 3 : 1;
+        $subst_trib = $dime_declaracao['substituto_tributario'] ? 1 : 2;
+        $escr_cont = $dime_declaracao['tem_escrita_contabil'] ? 1 : 2;
+        $qtd_trab = (int)($dime_declaracao['quantidade_trabalhadores'] ?? 0);
+
+        $sqlInit = "INSERT INTO dime_quadro_00 (
+            dime_declaracao_id, cnpj_empresa, inscricao_estadual, razao_social,
+            nome_fantasia, endereco_completo, municipio_codigo, cep, telefone,
+            email, cnae_principal, regime_tributario,
+            tipo_declaracao, regime_apuracao, porte_empresa, apuracao_consolidada,
+            apuracao_centralizada, transferencia_creditos, tem_creditos_presumidos,
+            tem_creditos_incentivos_fiscais, movimento, substituto_tributario,
+            tem_escrita_contabil, quantidade_trabalhadores
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+
+        $stmtInit = $pdo->prepare($sqlInit);
+        $stmtInit->execute([
+            $dime_id,
+            $dime_declaracao['cnpj'],
+            $dime_declaracao['inscricao_estadual'],
+            $dime_declaracao['razao_social'],
+            $dime_declaracao['razao_social'],
+            $endereco_completo,
+            $municipio_codigo,
+            $cep_limpo,
+            $dime_declaracao['telefone'] ?? '',
+            $dime_declaracao['email'] ?? '',
+            '0081/0',
+            'real',
+            $tipo_dec,
+            $regime_ap,
+            $porte_emp,
+            $apur_cons,
+            $apur_cent,
+            $transf_cred,
+            $cred_pres,
+            $cred_inc,
+            $mov,
+            $subst_trib,
+            $escr_cont,
+            $qtd_trab
+        ]);
+
+        $stmt = $pdo->prepare("SELECT * FROM dime_quadro_00 WHERE dime_declaracao_id = ?");
+        $stmt->execute([$dime_id]);
+        $quadro00_data = $stmt->fetch(PDO::FETCH_ASSOC);
+    }
+
     // Verificar se é POST (salvar dados)
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['form_submitted'])) {
-        // Verificar se já existe registro
-        $stmt = $pdo->prepare("SELECT id FROM dime_quadro_00 WHERE dime_declaracao_id = ?");
-        $stmt->execute([$dime_id]);
-        $existing = $stmt->fetch();
+        $cnpj_salvar = !empty($_POST['cnpj_empresa']) ? preg_replace('/\D/', '', $_POST['cnpj_empresa']) : $dime_declaracao['cnpj'];
+        $ie_salvar = !empty($_POST['inscricao_estadual']) ? $_POST['inscricao_estadual'] : $dime_declaracao['inscricao_estadual'];
+        $razao_salvar = !empty($_POST['razao_social']) ? $_POST['razao_social'] : $dime_declaracao['razao_social'];
 
         $campos = [
-            'cnpj_empresa' => $_POST['cnpj_empresa'] ?? '',
-            'inscricao_estadual' => $_POST['inscricao_estadual'] ?? '',
-            'razao_social' => $_POST['razao_social'] ?? '',
+            'cnpj_empresa' => $cnpj_salvar,
+            'inscricao_estadual' => $ie_salvar,
+            'razao_social' => $razao_salvar,
             'tipo_declaracao' => $_POST['tipo_declaracao'] ?? '1',
             'regime_apuracao' => $_POST['regime_apuracao'] ?? '2',
             'porte_empresa' => $_POST['porte_empresa'] ?? '1',
@@ -39,6 +147,11 @@ try {
             'tem_escrita_contabil' => $_POST['tem_escrita_contabil'] ?? '1',
             'quantidade_trabalhadores' => $_POST['quantidade_trabalhadores'] ?? '0'
         ];
+
+        // Verificar se já existe registro
+        $stmtEx = $pdo->prepare("SELECT id FROM dime_quadro_00 WHERE dime_declaracao_id = ?");
+        $stmtEx->execute([$dime_id]);
+        $existing = $stmtEx->fetch();
 
         if ($existing) {
             // Update
@@ -54,8 +167,30 @@ try {
             $params[] = $dime_id;
             $stmt->execute($params);
         } else {
-            // Insert
+            // Insert completo com campos obrigatórios
+            $endereco_completo = trim(($dime_declaracao['endereco'] ?? '') . ', ' . ($dime_declaracao['numero'] ?? ''));
+            if (!empty($dime_declaracao['complemento'])) $endereco_completo .= ', ' . $dime_declaracao['complemento'];
+            if (!empty($dime_declaracao['bairro'])) $endereco_completo .= ', ' . $dime_declaracao['bairro'];
+            if (empty(trim($endereco_completo, ', '))) $endereco_completo = 'Endereço não informado';
+
+            $municipio_codigo = '4205407';
+            if (!empty($dime_declaracao['municipio_id'])) {
+                $stmtM = $pdo->prepare("SELECT codigo_ibge FROM t_municipios WHERE id = ?");
+                $stmtM->execute([$dime_declaracao['municipio_id']]);
+                $ibge = $stmtM->fetchColumn();
+                if ($ibge) $municipio_codigo = $ibge;
+            }
+
+            $campos['nome_fantasia'] = $dime_declaracao['razao_social'];
+            $campos['endereco_completo'] = $endereco_completo;
+            $campos['municipio_codigo'] = $municipio_codigo;
+            $campos['cep'] = preg_replace('/\D/', '', $dime_declaracao['cep'] ?? '') ?: '88380000';
+            $campos['telefone'] = $dime_declaracao['telefone'] ?? '';
+            $campos['email'] = $dime_declaracao['email'] ?? '';
+            $campos['cnae_principal'] = '0081/0';
+            $campos['regime_tributario'] = 'real';
             $campos['dime_declaracao_id'] = $dime_id;
+
             $columns = implode(', ', array_keys($campos));
             $placeholders = str_repeat('?, ', count($campos) - 1) . '?';
 
@@ -64,6 +199,40 @@ try {
             $stmt->execute(array_values($campos));
         }
 
+        // Sincronizar dados principais na tabela dime_declaracoes
+        $stmtSync = $pdo->prepare("
+            UPDATE dime_declaracoes SET 
+                tipo_declaracao = ?,
+                regime_apuracao = ?,
+                porte_empresa = ?,
+                apuracao_consolidada = ?,
+                apuracao_centralizada = ?,
+                transferencia_creditos_periodo = ?,
+                tem_creditos_presumidos = ?,
+                tem_creditos_incentivos_fiscais = ?,
+                movimento = ?,
+                substituto_tributario = ?,
+                tem_escrita_contabil = ?,
+                quantidade_trabalhadores = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+        ");
+        $stmtSync->execute([
+            $campos['tipo_declaracao'],
+            $campos['regime_apuracao'],
+            $campos['porte_empresa'],
+            ($campos['apuracao_consolidada'] > 1 ? 1 : 0),
+            ($campos['apuracao_centralizada'] > 1 ? 1 : 0),
+            ($campos['transferencia_creditos'] > 1 ? 1 : 0),
+            ($campos['tem_creditos_presumidos'] > 1 ? 1 : 0),
+            ($campos['tem_creditos_incentivos_fiscais'] > 1 ? 1 : 0),
+            ($campos['movimento'] == 3 ? 1 : 0),
+            ($campos['substituto_tributario'] == 1 ? 1 : 0),
+            ($campos['tem_escrita_contabil'] == 2 ? 0 : 1),
+            $campos['quantidade_trabalhadores'],
+            $dime_id
+        ]);
+
         // Mensagem de sucesso
         $success_message = "Quadro 00 salvo com sucesso!";
         
@@ -71,22 +240,16 @@ try {
         $stmt = $pdo->prepare("SELECT * FROM dime_quadro_00 WHERE dime_declaracao_id = ?");
         $stmt->execute([$dime_id]);
         $quadro00_data = $stmt->fetch(PDO::FETCH_ASSOC);
-    } else {
-        // Carregar dados do Quadro 00 se existir
-        $stmt = $pdo->prepare("SELECT * FROM dime_quadro_00 WHERE dime_declaracao_id = ?");
-        $stmt->execute([$dime_id]);
-        $quadro00_data = $stmt->fetch(PDO::FETCH_ASSOC);
     }
     
 } catch (Exception $e) {
-    $quadro00_data = null;
     $error_message = "Erro: " . $e->getMessage();
 }
 
-// Função helper para valores seguros
-function safe_value($data, $key, $default = '') {
-    return ($data && isset($data[$key])) ? htmlspecialchars($data[$key]) : $default;
-}
+// Garantir que os dados da empresa estejam preenchidos mesmo se vazios em dime_quadro_00
+$cnpj_empresa_display = !empty($quadro00_data['cnpj_empresa']) ? $quadro00_data['cnpj_empresa'] : ($dime_declaracao['cnpj'] ?? '');
+$inscricao_estadual_display = !empty($quadro00_data['inscricao_estadual']) ? $quadro00_data['inscricao_estadual'] : ($dime_declaracao['inscricao_estadual'] ?? '');
+$razao_social_display = !empty($quadro00_data['razao_social']) ? $quadro00_data['razao_social'] : ($dime_declaracao['razao_social'] ?? '');
 ?>
 
 <div class="d-flex justify-content-between align-items-center mb-3">
@@ -135,7 +298,7 @@ function safe_value($data, $key, $default = '') {
                     </label>
                     <input type="text" class="form-control" id="cnpj_empresa" 
                            name="cnpj_empresa" placeholder="00.000.000/0000-00" 
-                           value="<?php echo safe_value($quadro00_data, 'cnpj_empresa'); ?>" 
+                           value="<?php echo htmlspecialchars(formatar_cnpj($cnpj_empresa_display)); ?>" 
                            readonly >
                     <div class="invalid-feedback">
                         CNPJ é obrigatório
@@ -148,7 +311,7 @@ function safe_value($data, $key, $default = '') {
                     </label>
                     <input type="text" class="form-control" id="inscricao_estadual" 
                            name="inscricao_estadual" placeholder="000.000.000.000" 
-                           value="<?php echo safe_value($quadro00_data, 'inscricao_estadual'); ?>" 
+                           value="<?php echo htmlspecialchars($inscricao_estadual_display); ?>" 
                            readonly>
                     <div class="invalid-feedback">
                         Inscrição Estadual é obrigatória
@@ -160,7 +323,7 @@ function safe_value($data, $key, $default = '') {
                     </label>
                     <input type="text" class="form-control" id="razao_social" 
                            name="razao_social" placeholder="Razão Social da Empresa" 
-                           value="<?php echo safe_value($quadro00_data, 'razao_social'); ?>" 
+                           value="<?php echo htmlspecialchars($razao_social_display); ?>" 
                            readonly>
                     <div class="invalid-feedback">
                         Nome Empresarial é obrigatório
@@ -827,7 +990,7 @@ function salvarAjax() {
     submitBtn.innerHTML = '<i class="bi bi-hourglass-split me-2"></i>Salvando...';
     
     // URL correta para o quadro
-    const postUrl = 'quadros/00_index.php?dime_id=' + (window.parent.DIME_CONFIG?.dimeId || new URLSearchParams(window.parent.location.search).get('id'));
+    const postUrl = 'quadros/00_index.php?dime_id=<?php echo (int)$dime_id; ?>';
     
     fetch(postUrl, {
         method: 'POST',
@@ -842,8 +1005,10 @@ function salvarAjax() {
             
             // Recarregar quadro
             setTimeout(() => {
-                if (window.parent && window.parent.loadQuadro) {
-                    window.parent.loadQuadro('00');
+                if (typeof loadQuadroContent === 'function') {
+                    loadQuadroContent('00', <?php echo (int)$dime_id; ?>);
+                } else if (window.parent && typeof window.parent.loadQuadroContent === 'function') {
+                    window.parent.loadQuadroContent('00', <?php echo (int)$dime_id; ?>);
                 }
             }, 500);
         } else {

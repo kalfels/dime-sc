@@ -141,9 +141,66 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$access_blocked) {
         $dime->status = 'rascunho';
 
         if ($dime->save()) {
+            // Criar registro inicial no Quadro 00
+            try {
+                $endereco_completo = trim(($empresa->endereco ?? '') . ', ' . ($empresa->numero ?? ''));
+                if (!empty($empresa->complemento)) $endereco_completo .= ', ' . $empresa->complemento;
+                if (!empty($empresa->bairro)) $endereco_completo .= ', ' . $empresa->bairro;
+                if (empty(trim($endereco_completo, ', '))) $endereco_completo = 'Endereço não informado';
+
+                $municipio_codigo = '4205407';
+                if (!empty($empresa->municipio_id)) {
+                    $stmtM = $pdo->prepare("SELECT codigo_ibge FROM t_municipios WHERE id = ?");
+                    $stmtM->execute([$empresa->municipio_id]);
+                    $ibge = $stmtM->fetchColumn();
+                    if ($ibge) $municipio_codigo = $ibge;
+                }
+
+                $cep_limpo = preg_replace('/\D/', '', $empresa->cep ?? '') ?: '88380000';
+                $stmtQ00 = $pdo->prepare("
+                    INSERT INTO dime_quadro_00 (
+                        dime_declaracao_id, cnpj_empresa, inscricao_estadual, razao_social,
+                        nome_fantasia, endereco_completo, municipio_codigo, cep, telefone,
+                        email, cnae_principal, regime_tributario,
+                        tipo_declaracao, regime_apuracao, porte_empresa, apuracao_consolidada,
+                        apuracao_centralizada, transferencia_creditos, tem_creditos_presumidos,
+                        tem_creditos_incentivos_fiscais, movimento, substituto_tributario,
+                        tem_escrita_contabil, quantidade_trabalhadores
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ");
+                $stmtQ00->execute([
+                    $dime->id,
+                    $empresa->cnpj,
+                    $empresa->inscricao_estadual,
+                    $empresa->razao_social,
+                    $empresa->razao_social,
+                    $endereco_completo,
+                    $municipio_codigo,
+                    $cep_limpo,
+                    $empresa->telefone ?? '',
+                    $empresa->email ?? '',
+                    '0081/0',
+                    'real',
+                    (string)$tipo_declaracao_int,
+                    (string)$regime_apuracao_int,
+                    (string)$porte_empresa_int,
+                    $dime->apuracao_consolidada ? 2 : 1,
+                    1,
+                    $dime->transferencia_creditos_periodo ? 2 : 1,
+                    1,
+                    1,
+                    $dime->movimento ? 3 : 1,
+                    $dime->substituto_tributario ? 1 : 2,
+                    $dime->tem_escrita_contabil ? 1 : 2,
+                    (int)($dime->quantidade_trabalhadores ?? 0)
+                ]);
+            } catch (\Exception $e) {
+                error_log('Erro ao auto-criar dime_quadro_00: ' . $e->getMessage());
+            }
+
             $success_message = 'Declaração DIME criada com sucesso! Agora você pode preencher os quadros.';
-            // Redirect to edit page to fill in the frames
-            header("Location: editar_dime.php?id={$dime->id}&message=success&text=" . urlencode($success_message));
+            // Redirect to edit page to fill in the frames (com ID codificado em base64)
+            header("Location: editar_dime.php?id=" . base64_encode($dime->id) . "&message=success&text=" . urlencode($success_message));
             exit;
         } else {
             throw new Exception('Erro ao salvar a declaração DIME.');

@@ -20,9 +20,9 @@ $user_id = $_SESSION['user_id'];
 $user_role = htmlspecialchars($_SESSION['user_role']);
 $contabilista_id_session = $_SESSION['contabilista_id'];
 
-// Get DIME ID (base64 decoded for obfuscation)
+// Get DIME ID (base64 decoded for obfuscation or direct integer)
 $encoded_id = $_GET['id'] ?? '';
-$dime_id = base64_decode($encoded_id);
+$dime_id = is_numeric($encoded_id) ? (int)$encoded_id : base64_decode($encoded_id);
 if (!$dime_id || !is_numeric($dime_id)) {
     header('Location: dashboard.php?message=error&text=' . urlencode('ID da DIME inválido.'));
     exit;
@@ -44,6 +44,10 @@ if ($user_role !== 'admin' && $dime->contabilista_id != $contabilista_id_session
 // Load related data
 $empresa = $dime->getEmpresa();
 $contabilista = $dime->getContabilista();
+if (!$empresa) {
+    header('Location: dashboard.php?message=error&text=' . urlencode('Empresa vinculada à declaração não encontrada.'));
+    exit;
+}
 
 // Carregar quadros habilitados para esta empresa
 $pdo = \App\Core\DBConnection::getInstance()->getConnection();
@@ -197,18 +201,43 @@ include '_header.php';
 
     <!-- JavaScript para carregamento AJAX -->
     <script>
+    // Configuração global para os quadros
+    window.DIME_CONFIG = {
+        dimeId: <?php echo (int)$dime_id; ?>
+    };
+
     // Quadros habilitados para esta empresa
     const quadrosHabilitados = <?php echo json_encode($quadrosHabilitados); ?>;
 
     document.addEventListener('DOMContentLoaded', function() {
         // Carregar automaticamente o primeiro quadro habilitado
         const primeiroQuadro = quadrosHabilitados.length > 0 ? quadrosHabilitados[0] : '00';
-        loadQuadroContent(primeiroQuadro, <?php echo $dime_id; ?>);
+        loadQuadroContent(primeiroQuadro, <?php echo (int)$dime_id; ?>);
     });
 
     function loadQuadroContent(quadroId, dimeId) {
+        // Mapear IDs dos quadros para nomes dos arquivos
+        const quadroMap = {
+            'quadro00': '00',
+            'quadro01': '0103',
+            'quadro02': '0203',
+            'quadro04': '0405',
+            'quadro05': '09',  // Quadro 05 (Créditos) está dentro do 09_index.php
+            'quadro09': '09',  // Quadro 09 (Débitos/Créditos) está no 09_index.php
+            'quadro10': '10',
+            'quadro11': '11',
+            'quadro12': '12',
+            'quadro14': '14',  // Quadro 14 - Crédito Presumido
+            'quadro41': '41',  // Quadro 41 - Créditos Acumulados
+            'quadro46': '46',  // Quadro 46 - Créditos por Regimes e Autorizações Especiais
+            'quadro49': '49',  // Quadro 49 - Entradas por Unidade da Federação
+            'quadro50': '50'   // Quadro 50 - Saídas por Unidade da Federação
+        };
+
+        const fileName = quadroMap[quadroId] || quadroId;
+
         // Verificar se o quadro está habilitado
-        if (!quadrosHabilitados.includes(quadroId)) {
+        if (!quadrosHabilitados.includes(fileName) && !quadrosHabilitados.includes(quadroId)) {
             const tabContent = document.getElementById('quadrosTabContent');
             tabContent.innerHTML = `
                 <div class="alert alert-warning" role="alert">
@@ -230,29 +259,10 @@ include '_header.php';
             </div>
         `;
 
-        // Mapear IDs dos quadros para nomes dos arquivos
-        const quadroMap = {
-            'quadro00': '00',
-            'quadro01': '0103',
-            'quadro02': '0203',
-            'quadro04': '0405',
-            'quadro05': '09',  // Quadro 05 (Créditos) está dentro do 09_index.php
-            'quadro09': '09',  // Quadro 09 (Débitos/Créditos) está no 09_index.php
-            'quadro10': '10',
-            'quadro11': '11',
-            'quadro12': '12',
-            'quadro14': '14',  // Quadro 14 - Crédito Presumido
-            'quadro41': '41',  // Quadro 41 - Créditos Acumulados
-            'quadro46': '46',  // Quadro 46 - Créditos por Regimes e Autorizações Especiais
-            'quadro49': '49',  // Quadro 49 - Entradas por Unidade da Federação
-            'quadro50': '50'   // Quadro 50 - Saídas por Unidade da Federação
-        };
-
-        const fileName = quadroMap[quadroId] || quadroId;
         const filePath = `quadros/${fileName}_index.php?dime_id=${dimeId}`;
 
         // Fazer requisição AJAX
-        fetch(filePath + '?t=' + Date.now()) // Adicionar timestamp para forçar recarregamento
+        fetch(filePath + '&t=' + Date.now()) // Adicionar timestamp para forçar recarregamento
             .then(response => {
                 if (!response.ok) {
                     throw new Error(`Erro HTTP: ${response.status} - ${response.statusText}`);
